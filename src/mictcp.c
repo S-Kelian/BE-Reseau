@@ -7,6 +7,7 @@ mic_tcp_sock globSocket;
 mic_tcp_sock_addr addrDest;
 unsigned int seq_num_glob=0;
 unsigned int ack_num_glob=0; 
+
 /*
  * Permet de créer un socket entre l’application et MIC-TCP
  * Retourne le descripteur du socket ou bien -1 en cas d'erreur
@@ -16,7 +17,7 @@ int mic_tcp_socket(start_mode sm)
    int result = -1;
    printf("[MIC-TCP] Appel de la fonction: ");  printf(__FUNCTION__); printf("\n");
    result = initialize_components(sm); /* Appel obligatoire */
-   set_loss_rate(0);
+   set_loss_rate(1);
 
    return result;
 }
@@ -39,12 +40,12 @@ int mic_tcp_bind(int socket, mic_tcp_sock_addr addr)
 int mic_tcp_accept(int socket, mic_tcp_sock_addr* addr)
 {
     printf("[MIC-TCP] Appel de la fonction: ");  printf(__FUNCTION__); printf("\n");
-
+/*
     mic_tcp_pdu pdu, pduRcv;
     // attente de la reception d'un socket SYN
     while (1){
-        if(IP_recv(pduRcv, &addr, TO)!=-1){
-            if (pduRcv.header.syn=1){
+        if(IP_recv(&pduRcv, addr, TO)!=-1){
+            if (pduRcv.header.syn==1){
                 break;
             }
         }
@@ -58,11 +59,12 @@ int mic_tcp_accept(int socket, mic_tcp_sock_addr* addr)
         return -1;
     }
     // On attend l'ACK
-    if(IP_recv(pduRcv, &addr, TO)!=-1){
-        if (pduRcv.header.ack=1){
+    if(IP_recv(&pduRcv, addr, TO)!=-1){
+        if (pduRcv.header.ack==1){
             globSocket.state=ESTABLISHED;
         }
     }
+    */
     return 0;
 }
 
@@ -72,8 +74,10 @@ int mic_tcp_accept(int socket, mic_tcp_sock_addr* addr)
  */
 int mic_tcp_connect(int socket, mic_tcp_sock_addr addr)
 {
+    
     printf("[MIC-TCP] Appel de la fonction: ");  printf(__FUNCTION__); printf("\n");
     addrDest=addr;
+    /*
     mic_tcp_pdu pdu, pduRcv;
     pdu.header.dest_port=addr.port;
     pdu.header.syn=1;
@@ -83,7 +87,7 @@ int mic_tcp_connect(int socket, mic_tcp_sock_addr addr)
     }
     globSocket.state=SYN_SENT;
     for(int nbConReq=1; nbConReq<maxReq; nbConReq++) {      
-        if( IP_recv(pduRcv, &addr, TO)!=-1){
+        if( IP_recv(&pduRcv, &addr, TO)!=-1){
             if (pduRcv.header.ack==1 && pdu.header.syn==1){
                 pdu.header.syn=0;
                 pdu.header.ack=1;
@@ -97,6 +101,7 @@ int mic_tcp_connect(int socket, mic_tcp_sock_addr addr)
             }
         }
     }
+    */
 
     return 0;
 }
@@ -112,22 +117,24 @@ int mic_tcp_send (int mic_sock, char* mesg, int mesg_size)
     mic_tcp_pdu pdu, pduRCV;
     pdu.header.source_port=globSocket.addr.port;
     pdu.header.dest_port=addrDest.port;
-    pdu.header.seq_num=0;
+    pdu.header.seq_num=seq_num_glob;
     pdu.header.ack_num=0;
     pdu.header.ack=0;
     pdu.header.syn=0;
     pdu.header.fin=0;
     pdu.payload.data=mesg;
     pdu.payload.size=mesg_size;
+    seq_num_glob = (seq_num_glob+1)%2;
     sentSize=IP_send(pdu,addrDest);
-    int retour =-1;
+    int success =-1;
     //attente ack
-    while (retour ==-1){
-        if (retour = IP_recv(pduRCV, addrRecv, 10)==-1 || seq_num_glob != pduRCV.header.ack_num){
+    while (success ==-1){
+        if ((IP_recv(&pduRCV, &addrDest, 1)==-1) || (seq_num_glob != pduRCV.header.ack_num) || (pduRCV.header.ack != 1)){
             sentSize=IP_send(pdu,addrDest);
+        } else {
+            success = 0;
         }
     }    
-    
     return sentSize ;
 }
 
@@ -168,5 +175,12 @@ int mic_tcp_close (int socket)
 void process_received_PDU(mic_tcp_pdu pdu, mic_tcp_sock_addr addr)
 {
     printf("[MIC-TCP] Appel de la fonction: "); printf(__FUNCTION__); printf("\n");
-    app_buffer_put(pdu.payload);
+    mic_tcp_pdu pduAck;
+    if (pdu.header.seq_num == ack_num_glob){
+        ack_num_glob = (ack_num_glob+1)%2;
+        app_buffer_put(pdu.payload);
+    }            
+    pduAck.header.ack=1;
+    pduAck.header.ack_num=ack_num_glob;
+    IP_send(pduAck,addr);
 }
