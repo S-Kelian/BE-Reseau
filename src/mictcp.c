@@ -2,11 +2,18 @@
 #include <api/mictcp_core.h>
 #define TO 10
 #define maxReq 10
+#define acceptedLossRate 10
 
 mic_tcp_sock globSocket;
 mic_tcp_sock_addr addrDest;
 unsigned int seq_num_glob=0;
-unsigned int ack_num_glob=0; 
+unsigned int ack_num_glob=0;
+
+// Nombres de paquets réellement envoyés
+unsigned int nbEnvois=0;
+// Nombre de paquets potentiellement envoyés
+unsigned int nbTentativesEnvoi=0;
+
 
 /*
  * Permet de créer un socket entre l’application et MIC-TCP
@@ -17,7 +24,7 @@ int mic_tcp_socket(start_mode sm)
    int result = -1;
    printf("[MIC-TCP] Appel de la fonction: ");  printf(__FUNCTION__); printf("\n");
    result = initialize_components(sm); /* Appel obligatoire */
-   set_loss_rate(1);
+   set_loss_rate(30);
 
    return result;
 }
@@ -89,13 +96,7 @@ int mic_tcp_connect(int socket, mic_tcp_sock_addr addr)
     for(int nbConReq=1; nbConReq<maxReq; nbConReq++) {      
         if( IP_recv(&pduRcv, &addr, TO)!=-1){
             if (pduRcv.header.ack==1 && pdu.header.syn==1){
-                pdu.header.syn=0;
-                pdu.header.ack=1;
-                if (IP_send(pdu,addrDest)==-1){
-                    return -1;
-                }
-            }
-        } else  {
+                pdu.heanbEnvois
             if (IP_send(pdu,addrDest)==-1){
                 return -1;
             }
@@ -114,7 +115,7 @@ int mic_tcp_send (int mic_sock, char* mesg, int mesg_size)
 {
     printf("[MIC-TCP] Appel de la fonction: "); printf(__FUNCTION__); printf("\n");
     int sentSize=-1;
-    mic_tcp_pdu pdu, pduRCV;
+    mic_tcp_pdu pdu, pduRCV = {0};
     pdu.header.source_port=globSocket.addr.port;
     pdu.header.dest_port=addrDest.port;
     pdu.header.seq_num=seq_num_glob;
@@ -126,13 +127,22 @@ int mic_tcp_send (int mic_sock, char* mesg, int mesg_size)
     pdu.payload.size=mesg_size;
     seq_num_glob = (seq_num_glob+1)%2;
     sentSize=IP_send(pdu,addrDest);
+    nbTentativesEnvoi++;
     int success =-1;
     //attente ack
     while (success ==-1){
         if ((IP_recv(&pduRCV, &addrDest, 1)==-1) || (seq_num_glob != pduRCV.header.ack_num) || (pduRCV.header.ack != 1)){
-            sentSize=IP_send(pdu,addrDest);
+            printf("%d < %d",nbEnvois*100, (100-acceptedLossRate)*nbTentativesEnvoi);
+            if (nbEnvois*100<(100-acceptedLossRate)*nbTentativesEnvoi){
+                printf("Erreur non acceptée -> paquet renvoyé\n");
+                sentSize=IP_send(pdu,addrDest);
+            } else {
+                printf("Erreur acceptée -> paquet suivant\n");
+                success = 0;
+            }          
         } else {
             success = 0;
+            nbEnvois++;
         }
     }    
     return sentSize ;
