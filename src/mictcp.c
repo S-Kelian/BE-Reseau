@@ -1,6 +1,6 @@
 #include <mictcp.h>
 #include <api/mictcp_core.h>
-#define TO 10
+#define TO 100
 #define maxReq 10
 #define acceptedLossRate 10
 
@@ -24,8 +24,7 @@ int mic_tcp_socket(start_mode sm)
    int result = -1;
    printf("[MIC-TCP] Appel de la fonction: ");  printf(__FUNCTION__); printf("\n");
    result = initialize_components(sm); /* Appel obligatoire */
-   set_loss_rate(30);
-
+   set_loss_rate(1);
    return result;
 }
 
@@ -47,31 +46,22 @@ int mic_tcp_bind(int socket, mic_tcp_sock_addr addr)
 int mic_tcp_accept(int socket, mic_tcp_sock_addr* addr)
 {
     printf("[MIC-TCP] Appel de la fonction: ");  printf(__FUNCTION__); printf("\n");
-/*
-    mic_tcp_pdu pdu, pduRcv;
+
+    mic_tcp_pdu pdu;
+    init_PDU(&pdu);
+
     // attente de la reception d'un socket SYN
-    while (1){
-        if(IP_recv(&pduRcv, addr, TO)!=-1){
-            if (pduRcv.header.syn==1){
-                break;
-            }
-        }
+    while (globSocket.state!=SYN_RECEIVED){
+        
     }
-    globSocket.state=SYN_RECEIVED;
+    printf("SYN recu\n");
     pdu.header.source_port = globSocket.addr.port;
     pdu.header.dest_port = addr->port;
     pdu.header.syn = 1;
     pdu.header.ack = 1;
     if (IP_send(pdu,*addr)==-1){
         return -1;
-    }
-    // On attend l'ACK
-    if(IP_recv(&pduRcv, addr, TO)!=-1){
-        if (pduRcv.header.ack==1){
-            globSocket.state=ESTABLISHED;
-        }
-    }
-    */
+    } 
     return 0;
 }
 
@@ -84,27 +74,45 @@ int mic_tcp_connect(int socket, mic_tcp_sock_addr addr)
     
     printf("[MIC-TCP] Appel de la fonction: ");  printf(__FUNCTION__); printf("\n");
     addrDest=addr;
-    /*
+    printf("Creation des pdu\n");
     mic_tcp_pdu pdu, pduRcv;
+    init_PDU(&pdu);
+    init_PDU(&pduRcv);
     pdu.header.dest_port=addr.port;
     pdu.header.syn=1;
-
-    if (IP_send(pdu,addrDest)==-1){
-        return -1;
+    pdu.header.ack=0;
+    printf("Envoi du pdu syn : %d, ack : %d\n", pdu.header.syn, pdu.header.ack);
+    while (globSocket.state!=SYN_SENT){
+        if (IP_send(pdu,addrDest)!=-1){
+            globSocket.state=SYN_SENT;
+        }
     }
-    globSocket.state=SYN_SENT;
-    for(int nbConReq=1; nbConReq<maxReq; nbConReq++) {      
+    printf("SYN envoye\n");
+    for(int nbConReq=1; nbConReq<maxReq; nbConReq++) {   
+        printf("Attente du SYNACK\n");   
         if( IP_recv(&pduRcv, &addr, TO)!=-1){
-            if (pduRcv.header.ack==1 && pdu.header.syn==1){
-                pdu.heanbEnvois
+            printf("pdu recu\n");
+            if (pduRcv.header.ack==1 && pduRcv.header.syn==1){
+                printf("SYNACK recu\n");
+                pdu.header.syn=0;
+                pdu.header.ack=1;
+                if (IP_send(pdu,addrDest)==-1){
+                    printf("Erreur envoi ACK\n");
+                    return -1;
+                }
+                printf("ACK envoye\n");
+                globSocket.state=ESTABLISHED;
+                return 0;
+            }
+        } else  {
+            printf("Erreur reception paquet\n");
             if (IP_send(pdu,addrDest)==-1){
                 return -1;
             }
         }
     }
-    */
-
-    return 0;
+    printf("Nombre de requetes de connexion max atteint\n");
+    return -1;
 }
 
 /*
@@ -115,14 +123,17 @@ int mic_tcp_send (int mic_sock, char* mesg, int mesg_size)
 {
     printf("[MIC-TCP] Appel de la fonction: "); printf(__FUNCTION__); printf("\n");
     int sentSize=-1;
-    mic_tcp_pdu pdu, pduRCV = {0};
-    pdu.header.source_port=globSocket.addr.port;
-    pdu.header.dest_port=addrDest.port;
-    pdu.header.seq_num=seq_num_glob;
-    pdu.header.ack_num=0;
-    pdu.header.ack=0;
-    pdu.header.syn=0;
-    pdu.header.fin=0;
+    mic_tcp_pdu pdu, pduRCV;
+    init_PDU(&pdu);
+    init_PDU(&pduRCV);
+    // pdu.header.source_port=globSocket.addr.port;
+    // pdu.header.dest_port=addrDest.port;
+    // pdu.header.seq_num=seq_num_glob;
+    // pdu.header.ack_num=0;
+    // pdu.header.ack=0;
+    // pdu.header.syn=0;
+    // pdu.header.fin=0;
+    // la fonction init_PDU() initialise les champs à la bonne valeur pour l'envoi
     pdu.payload.data=mesg;
     pdu.payload.size=mesg_size;
     seq_num_glob = (seq_num_glob+1)%2;
@@ -186,11 +197,27 @@ void process_received_PDU(mic_tcp_pdu pdu, mic_tcp_sock_addr addr)
 {
     printf("[MIC-TCP] Appel de la fonction: "); printf(__FUNCTION__); printf("\n");
     mic_tcp_pdu pduAck;
+    init_PDU(&pduAck);
     if (pdu.header.seq_num == ack_num_glob){
         ack_num_glob = (ack_num_glob+1)%2;
         app_buffer_put(pdu.payload);
-    }            
-    pduAck.header.ack=1;
-    pduAck.header.ack_num=ack_num_glob;
-    IP_send(pduAck,addr);
+    }
+    // si le paquet recu n'est pas une demande de connexion
+    if (pdu.header.syn!=1 && pdu.header.ack==0){
+        pduAck.header.ack=1;
+        pduAck.header.ack_num=ack_num_glob;
+        IP_send(pduAck,addr);
+    }
+}
+
+void init_PDU(mic_tcp_pdu * pdu){
+    pdu->header.source_port=globSocket.addr.port;
+    pdu->header.dest_port=addrDest.port;
+    pdu->header.seq_num=seq_num_glob;
+    pdu->header.ack_num=ack_num_glob;
+    pdu->header.ack=0;
+    pdu->header.syn=0;
+    pdu->header.fin=0;
+    pdu->payload.data=NULL;
+    pdu->payload.size=0;
 }
